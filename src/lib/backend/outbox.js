@@ -1,5 +1,5 @@
-import { getDb } from '@/lib/mongodb';
-import { v4 as uuidv7 } from 'uuid';
+import { getDb } from "../mongodb.js";
+import { v4 as uuidv7 } from "uuid";
 
 const OUTBOX_COLLECTION = 'side_effect_outbox';
 
