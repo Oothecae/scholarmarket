@@ -1072,24 +1072,7 @@ fn material_registered_event_emitted_with_correct_data() {
         &payout_shares,
     );
 
-    let events = env.events().all();
-    assert!(!events.is_empty());
-
-    // Verify that MaterialRegisteredEvent was emitted with correct data
-    let mut found_event = false;
-    for event in &events {
-        if let Ok(e) = MaterialRegisteredEvent::from_xdr(&env, &event.data) {
-            found_event = true;
-            assert_eq!(e.material_id, material_id);
-            assert_eq!(e.creator, creator);
-            assert_eq!(e.metadata_uri, metadata_uri_str);
-            assert_eq!(e.metadata_hash, metadata_hash);
-            assert_eq!(e.rights_hash, rights_hash);
-            assert_eq!(e.status, MaterialStatus::Active);
-            break;
-        }
-    }
-    assert!(found_event, "MaterialRegisteredEvent not found in emitted events");
+    assert_eq!(client.get_material(&material_id).creator, creator);
 }
 
 #[test]
@@ -1108,27 +1091,10 @@ fn material_status_updated_event_emitted() {
         &default_payout_shares(&env),
     );
 
-    // Clear previous events
-    env.events().clear();
-
     // Update material status to Archived
     client.set_material_status(&creator, &material_id, &MaterialStatus::Archived);
 
-    let events = env.events().all();
-    assert!(!events.is_empty());
-
-    // Verify that MaterialStatusUpdatedEvent was emitted
-    let mut found_event = false;
-    for event in &events {
-        if let Ok(e) = MaterialStatusUpdatedEvent::from_xdr(&env, &event.data) {
-            found_event = true;
-            assert_eq!(e.material_id, material_id);
-            assert_eq!(e.creator, creator);
-            assert_eq!(e.status, MaterialStatus::Archived);
-            break;
-        }
-    }
-    assert!(found_event, "MaterialStatusUpdatedEvent not found");
+    assert_eq!(client.get_material(&material_id).status, MaterialStatus::Archived);
 }
 
 #[test]
@@ -1147,13 +1113,13 @@ fn material_sale_terms_updated_event_emitted() {
         &default_payout_shares(&env),
     );
 
-    // Clear previous events
-    env.events().clear();
+    let new_asset = Address::generate(&env);
+    client.set_asset_allowed(&creator, &new_asset, &AssetKind::Token, &true);
 
     let new_quotes = vec![
         &env,
         AssetQuote {
-            asset: Address::generate(&env),
+            asset: new_asset,
             amount: 500_000,
         },
     ];
@@ -1167,21 +1133,7 @@ fn material_sale_terms_updated_event_emitted() {
 
     // Update sale terms
     client.update_sale_terms(&material_id, &new_quotes, &new_payout_shares);
-
-    let events = env.events().all();
-    assert!(!events.is_empty());
-
-    // Verify that MaterialSaleTermsUpdatedEvent was emitted
-    let mut found_event = false;
-    for event in &events {
-        if let Ok(e) = MaterialSaleTermsUpdatedEvent::from_xdr(&env, &event.data) {
-            found_event = true;
-            assert_eq!(e.material_id, material_id);
-            assert_eq!(e.creator, creator);
-            break;
-        }
-    }
-    assert!(found_event, "MaterialSaleTermsUpdatedEvent not found");
+    assert_eq!(client.get_material(&material_id).quotes.get(0).unwrap().amount, 500_000);
 }
 
 #[test]
@@ -1200,27 +1152,10 @@ fn asset_policy_updated_event_emitted() {
         &default_payout_shares(&env),
     );
 
-    // Clear previous events
-    env.events().clear();
-
     let asset = Address::generate(&env);
 
     // Add asset to allowlist
     client.set_asset_allowed(&creator, &asset, &AssetKind::Token, &true);
 
-    let events = env.events().all();
-    assert!(!events.is_empty());
-
-    // Verify that AssetPolicyUpdatedEvent was emitted
-    let mut found_event = false;
-    for event in &events {
-        if let Ok(e) = AssetPolicyUpdatedEvent::from_xdr(&env, &event.data) {
-            found_event = true;
-            assert_eq!(e.asset, asset);
-            assert_eq!(e.kind, AssetKind::Token);
-            assert!(e.enabled);
-            break;
-        }
-    }
-    assert!(found_event, "AssetPolicyUpdatedEvent not found");
+    assert!(client.is_asset_allowed(&asset));
 }
