@@ -6,14 +6,16 @@ import { normalizeStringList, sanitizeObject, validateUploadPayload, validateUpl
 import { pinata } from '@/lib/pinata'
 import { validatePinataResponse, validateGatewayUrl, retryWithBackoff } from '@/lib/api/storage'
 import { getDb } from '@/lib/mongodb'
+import {
+  validateUploadedFile,
+  MAX_FILE_SIZE_BYTES,
+  MAX_THUMBNAIL_SIZE_BYTES,
+} from '@/lib/ipfs/uploadValidator'
+import { invalidateMarketplaceCache } from '@/lib/cache/redis'
 
 export const dynamic = 'force-dynamic'
 
-// --- Validation Constants ---
-const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 // 10MB
-const MAX_THUMBNAIL_SIZE_BYTES = 5 * 1024 * 1024 // 5MB
-
-// Common educational document MIME types
+// Common educational document & media MIME types
 const ALLOWED_FILE_TYPES = [
   'application/pdf',
   'application/msword', // .doc
@@ -25,10 +27,11 @@ const ALLOWED_FILE_TYPES = [
   'text/plain',
   'application/zip',
   'application/x-zip-compressed',
+  'video/mp4',
 ]
 
 // Allowed thumbnail image types
-const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
 
 export async function POST(request) {
   return withApiHardening(
@@ -62,14 +65,14 @@ export async function POST(request) {
             event: 'upload_failed',
             route: 'upload',
             method: 'POST',
-            status: 413,
+            status: 400,
             reason: 'file_too_large',
           })
           return NextResponse.json(
             {
-              error: `File size (${sizeMB}MB) exceeds the 10MB limit.`,
+              error: `File size (${sizeMB}MB) exceeds the 50MB limit.`,
             },
-            { status: 413 }
+            { status: 400 }
           )
         }
 
@@ -78,14 +81,30 @@ export async function POST(request) {
             event: 'upload_failed',
             route: 'upload',
             method: 'POST',
-            status: 415,
+            status: 400,
             reason: 'unsupported_file_type',
           })
           return NextResponse.json(
             {
-              error: `Unsupported file type: ${file.type || 'unknown'}. Allowed types include PDF, Word, Excel, PPT, TXT, and ZIP.`,
+              error: `Unsupported file type: ${file.type || 'unknown'}. Allowed types include PDF, Word, Excel, PPT, TXT, ZIP, and MP4.`,
             },
-            { status: 415 }
+            { status: 400 }
+          )
+        }
+
+        // Magic byte verification for main file
+        const fileMagicCheck = await validateUploadedFile(file, ALLOWED_FILE_TYPES)
+        if (!fileMagicCheck.valid) {
+          auditLog({
+            event: 'upload_blocked',
+            route: 'upload',
+            method: 'POST',
+            status: 400,
+            reason: fileMagicCheck.reason,
+          })
+          return NextResponse.json(
+            { error: fileMagicCheck.reason || 'Invalid file content signature.' },
+            { status: 400 }
           )
         }
 
@@ -97,14 +116,14 @@ export async function POST(request) {
               event: 'upload_failed',
               route: 'upload',
               method: 'POST',
-              status: 413,
+              status: 400,
               reason: 'thumbnail_too_large',
             })
             return NextResponse.json(
               {
                 error: `Thumbnail size (${sizeMB}MB) exceeds the 5MB limit.`,
               },
-              { status: 413 }
+              { status: 400 }
             )
           }
 
@@ -113,14 +132,29 @@ export async function POST(request) {
               event: 'upload_failed',
               route: 'upload',
               method: 'POST',
-              status: 415,
+              status: 400,
               reason: 'unsupported_thumbnail_type',
             })
             return NextResponse.json(
               {
-                error: `Unsupported thumbnail type: ${image.type || 'unknown'}. Allowed types are JPG, PNG, and WEBP.`,
+                error: `Unsupported thumbnail type: ${image.type || 'unknown'}. Allowed types are JPG, PNG, WEBP, and GIF.`,
               },
-              { status: 415 }
+              { status: 400 }
+            )
+          }
+
+          const imageMagicCheck = await validateUploadedFile(image, ALLOWED_IMAGE_TYPES)
+          if (!imageMagicCheck.valid) {
+            auditLog({
+              event: 'upload_blocked',
+              route: 'upload',
+              method: 'POST',
+              status: 400,
+              reason: imageMagicCheck.reason,
+            })
+            return NextResponse.json(
+              { error: imageMagicCheck.reason || 'Invalid thumbnail image content signature.' },
+              { status: 400 }
             )
           }
         }
@@ -365,6 +399,8 @@ export async function POST(request) {
           method: 'POST',
           status: 200,
         })
+
+        await invalidateMarketplaceCache();
 
         // 8️⃣ Return the CID as storageKey
         return NextResponse.json({

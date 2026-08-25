@@ -1,0 +1,18 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "fix/issue-41-docs-smart-contracts",
+    "main",
+    "origin"
+  ],
+  "parent": {
+    "fix/issue-41-docs-smart-contracts": "main",
+    "main": null,
+    "origin": "main"
+  },
+  "order": [
+    "main",
+    "fix/issue-41-docs-smart-contracts",
+    "origin"
+  ]
+}
