@@ -150,6 +150,8 @@ pub struct EntitlementRecord {
     pub asset: Address,
     pub amount: i128,
     pub granted_ledger: u32,
+    pub seat_count: u32,
+    pub remaining_seats: u32,
 }
 
 /// Escrow record holding creator payout funds during the cooling-off period
@@ -245,6 +247,9 @@ pub enum PurchaseError {
     InvalidQuoteAmount = 13,
     AssetNotAcceptedForMaterial = 14,
     EntitlementAlreadyExists = 15,
+    InvalidSeatCount = 16,
+    NoRemainingSeats = 17,
+    CannotAssignToSelf = 18,
 
     // Payout errors
     PayoutTransferFailed = 20,
@@ -423,6 +428,20 @@ pub struct CreatorTierUpdatedEvent {
     pub tier: CreatorTier,
 }
 
+/// Event: seat.assigned
+#[contractevent(topics = ["seat", "assigned"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SeatAssignedEvent {
+    #[topic]
+    pub material_id: BytesN<32>,
+    #[topic]
+    pub purchaser: Address,
+    #[topic]
+    pub assignee: Address,
+    pub purchase_id: u64,
+    pub remaining_seats: u32,
+}
+
 /// The PurchaseManager contract
 #[contract]
 pub struct PurchaseManager;
@@ -558,16 +577,21 @@ impl PurchaseManager {
         Ok(())
     }
 
-    /// Execute a purchase for a material
+    /// Execute a purchase for a material (supporting bulk licensing)
     pub fn purchase(
         env: Env,
         buyer: Address,
         material_id: BytesN<32>,
         asset: Address,
         expected_amount: i128,
+        seat_count: u32,
         transaction_id: Bytes,
     ) -> Result<u64, PurchaseError> {
         buyer.require_auth();
+
+        if seat_count == 0 {
+            return Err(PurchaseError::InvalidSeatCount);
+        }
 
         let config = get_platform_config(&env)?;
 
@@ -595,16 +619,21 @@ impl PurchaseManager {
         let quote = find_quote(&material.quotes, &asset)
             .ok_or(PurchaseError::AssetNotAcceptedForMaterial)?;
 
-        if quote.amount != expected_amount {
+        if quote.amount <= 0 {
             return Err(PurchaseError::InvalidQuoteAmount);
         }
-        if quote.amount <= 0 {
+
+        let gross = quote
+            .amount
+            .checked_mul(seat_count as i128)
+            .ok_or(PurchaseError::InvalidQuoteAmount)?;
+
+        if gross != expected_amount {
             return Err(PurchaseError::InvalidQuoteAmount);
         }
 
         validate_payout_shares(&material.payout_shares)?;
 
-        let gross = quote.amount;
         let effective_fee_bps =
             get_effective_fee_bps(&env, &material.creator, config.platform_fee_bps);
         let platform_fee = (gross * effective_fee_bps as i128) / BASIS_POINTS as i128;
@@ -668,6 +697,8 @@ impl PurchaseManager {
             asset: asset.clone(),
             amount: gross,
             granted_ledger: current_ledger,
+            seat_count,
+            remaining_seats: seat_count,
         };
 
         set_entitlement(&env, &entitlement);
@@ -703,6 +734,63 @@ impl PurchaseManager {
         .publish(&env);
 
         Ok(purchase_id)
+    }
+
+    /// Assign an individual seat from a multi-seat license to a recipient address
+    pub fn assign_seat(
+        env: Env,
+        purchaser: Address,
+        material_id: BytesN<32>,
+        assignee: Address,
+    ) -> Result<(), PurchaseError> {
+        purchaser.require_auth();
+
+        if purchaser == assignee {
+            return Err(PurchaseError::CannotAssignToSelf);
+        }
+
+        let mut purchaser_entitlement = get_entitlement_internal(&env, &material_id, &purchaser)
+            .ok_or(PurchaseError::MaterialNotFound)?;
+
+        if !purchaser_entitlement.active {
+            return Err(PurchaseError::MaterialNotActive);
+        }
+
+        if purchaser_entitlement.remaining_seats == 0 {
+            return Err(PurchaseError::NoRemainingSeats);
+        }
+
+        if has_entitlement_internal(&env, &material_id, &assignee) {
+            return Err(PurchaseError::EntitlementAlreadyExists);
+        }
+
+        purchaser_entitlement.remaining_seats -= 1;
+        set_entitlement(&env, &purchaser_entitlement);
+
+        let current_ledger = env.ledger().sequence();
+        let assignee_entitlement = EntitlementRecord {
+            material_id: material_id.clone(),
+            buyer: assignee.clone(),
+            active: true,
+            purchase_id: purchaser_entitlement.purchase_id,
+            asset: purchaser_entitlement.asset.clone(),
+            amount: 0,
+            granted_ledger: current_ledger,
+            seat_count: 1,
+            remaining_seats: 0,
+        };
+        set_entitlement(&env, &assignee_entitlement);
+
+        SeatAssignedEvent {
+            material_id,
+            purchaser,
+            assignee,
+            purchase_id: purchaser_entitlement.purchase_id,
+            remaining_seats: purchaser_entitlement.remaining_seats,
+        }
+        .publish(&env);
+
+        Ok(())
     }
 
     /// Check if a buyer has an active entitlement for a material

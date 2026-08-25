@@ -36,6 +36,10 @@ const SIGNATURES = {
   'application/vnd.openxmlformats-officedocument.presentationml.presentation': [
     { offset: 0, bytes: [0x50, 0x4b, 0x03, 0x04] },
   ],
+  // Video formats
+  'video/mp4': [
+    { offset: 4, bytes: [0x66, 0x74, 0x79, 0x70] }, // ftyp box (standard ISO/MP4)
+  ],
   // Images
   'image/jpeg': [
     { offset: 0, bytes: [0xff, 0xd8, 0xff] },
@@ -43,10 +47,32 @@ const SIGNATURES = {
   'image/png': [
     { offset: 0, bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] },
   ],
+  'image/gif': [
+    { offset: 0, bytes: [0x47, 0x49, 0x46, 0x38, 0x37, 0x61] }, // GIF87a
+    { offset: 0, bytes: [0x47, 0x49, 0x46, 0x38, 0x39, 0x61] }, // GIF89a
+  ],
   'image/webp': [
     { offset: 0, bytes: [0x52, 0x49, 0x46, 0x46] }, // RIFF — verified alongside WEBP marker below
   ],
 };
+
+export const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
+export const MAX_THUMBNAIL_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
+
+export function validateFileSize(file, maxBytes = MAX_FILE_SIZE_BYTES) {
+  if (!file || typeof file.size !== 'number') {
+    return { valid: false, reason: 'Invalid file size metadata.' };
+  }
+  if (file.size > maxBytes) {
+    const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+    const limitMB = (maxBytes / (1024 * 1024)).toFixed(0);
+    return {
+      valid: false,
+      reason: `File size (${sizeMB}MB) exceeds the maximum allowed limit of ${limitMB}MB.`,
+    };
+  }
+  return { valid: true };
+}
 
 // WEBP requires an additional check at bytes 8–11
 const WEBP_MARKER = [0x57, 0x45, 0x42, 0x50]; // "WEBP"

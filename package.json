@@ -14,9 +14,9 @@
   ],
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build --webpack",
-    "start": "next start",
+    "dev": "node init && next dev",
+    "build": "node init && next build --webpack",
+    "start": "node init && next start",
     "lint": "eslint",
     "test": "vitest",
     "test:all": "npm run test:contracts && npm run test:backend && npm run test:integration && npm run test:visual",
